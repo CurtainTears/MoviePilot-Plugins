@@ -69,6 +69,7 @@ class Fnmvscheduler(_PluginBase):
     _token_manager = None 
     _precision_scan_notify = False 
     _precision_scan_msgtype = None 
+    _path_mapping: str = ""
 
     def init_plugin(self, config: dict = None):
         if config:
@@ -83,6 +84,7 @@ class Fnmvscheduler(_PluginBase):
             self._precision_scan_enabled = config.get("precision_scan_enabled", False)
             self._precision_scan_notify = config.get("precision_scan_notify", False)
             self._precision_scan_msgtype = config.get("precision_scan_msgtype")
+            self._path_mapping = config.get("path_mapping", "")
 
         self._task_scheduler = BackgroundScheduler(timezone=settings.TZ)
 
@@ -275,7 +277,8 @@ class Fnmvscheduler(_PluginBase):
                 "cron_schedule": self._cron_schedule,
                 "precision_scan_enabled": self._precision_scan_enabled,
                 "precision_scan_notify": self._precision_scan_notify,
-                "precision_scan_msgtype": self._precision_scan_msgtype
+                "precision_scan_msgtype": self._precision_scan_msgtype,
+                "path_mapping": self._path_mapping
                             })
             logger.info("【飞牛影视调度器】'清除日志' 选项已重置为 False。")
 
@@ -369,7 +372,8 @@ class Fnmvscheduler(_PluginBase):
                 "cron_schedule": self._cron_schedule,
                 "precision_scan_enabled": self._precision_scan_enabled,
                 "precision_scan_notify": self._precision_scan_notify,
-                "precision_scan_msgtype": self._precision_scan_msgtype
+                "precision_scan_msgtype": self._precision_scan_msgtype,
+                "path_mapping": self._path_mapping
             })
 
     
@@ -439,7 +443,8 @@ class Fnmvscheduler(_PluginBase):
                 "cron_schedule": self._cron_schedule,
                 "precision_scan_enabled": self._precision_scan_enabled,
                 "precision_scan_notify": self._precision_scan_notify,
-                "precision_scan_msgtype": self._precision_scan_msgtype
+                "precision_scan_msgtype": self._precision_scan_msgtype,
+                "path_mapping": self._path_mapping
                             })
             logger.info("【飞牛影视调度器】'媒体库获取测试' 选项已重置为 False。")
 
@@ -826,7 +831,18 @@ class Fnmvscheduler(_PluginBase):
             # 构建精确扫描请求参数
             scan_url = f"{base_url.rstrip('/')}/api/v1/mdb/scan/{lib.id}"
             api_path = f"/api/v1/mdb/scan/{lib.id}"
-            payload = {"dir_list": [folder_path]}
+            # [自定义修改] 动态读取UI配置的路径替换规则
+            feiniu_path = folder_path
+            if self._path_mapping:
+                mapping_lines = self._path_mapping.strip().split('\n')
+                for line in mapping_lines:
+                    line = line.strip()
+                    if line and '|' in line:
+                        old_path, new_path = line.split('|', 1)
+                    if old_path.strip() and new_path.strip():
+                        feiniu_path = feiniu_path.replace(old_path.strip(), new_path.strip())
+        
+            payload = {"dir_list": [feiniu_path]}
             # 关键修复：使用与测试12.py完全一致的JSON序列化方式（添加separators参数）
             body = json.dumps(payload, separators=(',', ':'), ensure_ascii=False)
             # 转换为UTF-8字节流，确保与签名计算一致
@@ -1173,6 +1189,28 @@ class Fnmvscheduler(_PluginBase):
                                                             {
                                                                 "component": "VRow",
                                                                 "content": [
+                                                                    {
+                                                                        "component": "VCol", 
+                                                                        "props": {"cols": 12}, 
+                                                                        "content": [
+                                                                            {
+                                                                                "component": "VTextarea", 
+                                                                                "props": {
+                                                                                    "model": "path_mapping",
+                                                                                    "label": "路径替换映射 (解决SMB/Docker路径不一致)",
+                                                                                    "placeholder": "/NAS/|/vol02/1000-4-b223123e/",
+                                                                                    "hint": "将MP发送给飞牛的路径进行替换。格式：MP路径|飞牛真实路径，每行一条",
+                                                                                    "persistent-hint": True,
+                                                                                    "rows": 2
+                                                                                }
+                                                                            }
+                                                                        ]
+                                                                    }
+                                                                ]
+                                                            },
+                                                            {
+                                                                "component": "VRow",
+                                                                "content": [
                                                                     {"component": "VCol", "props": {"cols": 12}, "content": [
                                                                         {"component": "VSwitch", "props": {"model": "precision_scan_notify", "label": "开启通知", "color": "primary"}}
                                                                     ]}
@@ -1278,6 +1316,7 @@ class Fnmvscheduler(_PluginBase):
             "precision_scan_enabled": False, # 新增精确扫描默认值
             "precision_scan_notify": False, # 精确扫描通知开关默认值
             "precision_scan_msgtype": self._precision_scan_msgtype or "SiteMessage", # 通知类型默认值
+            "path_mapping": self._path_mapping
         }
         
         return form_config, default_values
