@@ -40,7 +40,7 @@ class Fnmvscheduler(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/EWEDLCM/MoviePilot-Plugins/main/icons/fnmv.png"
     # 插件版本
-    plugin_version = "2.2.2" 
+    plugin_version = "2.2.3"
     # 插件作者
     plugin_author = "EWEDL"
     # 作者主页
@@ -383,15 +383,11 @@ class Fnmvscheduler(_PluginBase):
         获取媒体库列表
         """
         try:
-            libraries_url = f"{base_url.rstrip('/')}/api/v1/mdb"
-            headers = {"Authorization": token, "Accept": "application/json"}
-            response = api._session.get(libraries_url, headers=headers, timeout=10)
-            response.raise_for_status()
-            data = response.json()
-            if data and data.get("code") == 0 and "data" in data:
-                return data.get("data", [])
+            response = api.request("/mdb")
+            if response and response.success:
+                return response.data or []
             else:
-                logger.warning(f"【飞牛影视调度器】获取媒体库列表时API返回错误: {data}")
+                logger.warning(f"【飞牛影视调度器】获取媒体库列表时API返回错误: {response}")
         except Exception as e:
             logger.error(f"【飞牛影视调度器】获取媒体库列表时发生错误: {e}")
         return []
@@ -402,21 +398,17 @@ class Fnmvscheduler(_PluginBase):
         """
         try:
             scan_url = f"{base_url.rstrip('/')}/api/v1/mdb/scan/{library_id}"
-            headers = {"Authorization": token, "Accept": "application/json", "Content-Type": "application/json"}
             payload = {"dir_list": folder_paths}
 
             logger.info(f"【飞牛影视调度器】正在发起文件夹扫描请求，URL: {scan_url}")
             logger.info(f"【飞牛影视调度器】扫描文件夹: {folder_paths}")
 
-            response = api._session.post(scan_url, headers=headers, json=payload, timeout=10)
-            response.raise_for_status()
-            data = response.json()
-
-            if data and data.get("code") == 0:
+            response = api.request(f"/mdb/scan/{library_id}", method="post", data=payload)
+            if response and response.success:
                 logger.info(f"【飞牛影视调度器】文件夹扫描请求发送成功")
                 return True
             else:
-                logger.warning(f"【飞牛影视调度器】文件夹扫描请求失败: {data}")
+                logger.warning(f"【飞牛影视调度器】文件夹扫描请求失败: {response}")
                 return False
         except Exception as e:
             logger.error(f"【飞牛影视调度器】执行文件夹扫描时发生错误: {e}")
@@ -450,20 +442,18 @@ class Fnmvscheduler(_PluginBase):
 
     
     def _get_running_tasks(self, api: fnapi.Api, base_url: str, token: str) -> List[str]:
+        """通过宿主公开接口获取扫描任务，兼容不含私有会话的API实现。"""
         try:
             task_url = f"{base_url.rstrip('/')}/api/v1/task/running"
-            headers = {"Authorization": token, "Accept": "application/json"}
             logger.debug(f"【飞牛影视调度器】正在请求运行中的任务列表，URL: {task_url}")
-            response = api._session.get(task_url, headers=headers, timeout=10)
-            response.raise_for_status()
-            data = response.json()
-            if data and data.get("code") == 0 and "data" in data:
-                tasks = data.get("data", [])
+            response = api.request("/task/running")
+            if response and response.success:
+                tasks = response.data or []
                 running_guids = list(set(task.get("guid") for task in tasks if task.get("guid")))
                 logger.debug(f"【飞牛影视调度器】当前正在运行的扫描任务GUID: {running_guids if running_guids else '无'}")
                 return running_guids
             else:
-                logger.warning(f"【飞牛影视调度器】获取任务列表时API返回错误: {data}")
+                logger.warning(f"【飞牛影视调度器】获取任务列表时API返回错误: {response}")
         except Exception as e:
             logger.error(f"【飞牛影视调度器】获取正在运行的任务列表时发生网络或解析错误: {e}")
         return []
@@ -830,7 +820,7 @@ class Fnmvscheduler(_PluginBase):
         try:
             # 构建精确扫描请求参数
             scan_url = f"{base_url.rstrip('/')}/api/v1/mdb/scan/{lib.id}"
-            api_path = f"/api/v1/mdb/scan/{lib.id}"
+            api_path = f"/mdb/scan/{lib.id}"
             # [自定义修改] 动态读取UI配置的路径替换规则
             feiniu_path = folder_path
             if self._path_mapping:
@@ -843,40 +833,18 @@ class Fnmvscheduler(_PluginBase):
                         feiniu_path = feiniu_path.replace(old_path.strip(), new_path.strip())
         
             payload = {"dir_list": [feiniu_path]}
-            # 关键修复：使用与测试12.py完全一致的JSON序列化方式（添加separators参数）
-            body = json.dumps(payload, separators=(',', ':'), ensure_ascii=False)
-            # 转换为UTF-8字节流，确保与签名计算一致
-            body_bytes = body.encode('utf-8')
-
             logger.debug(f"【飞牛影视调度器-精确扫描】准备发起精确扫描请求:")
             logger.debug(f"  - URL: {scan_url}")
             logger.debug(f"  - API路径: {api_path}")
             logger.debug(f"  - 文件夹: {folder_path}")
 
-            # === 首次请求：使用动态生成的签名 ===
-            logger.debug(f"【飞牛影视调度器-精确扫描】=== 首次请求：使用动态生成的签名 ===")
-
-            # 使用新的签名算法生成authx信息
-            # 使用TokenManager的内置API密钥
-            authx_info = self._signature_manager.generate_authx_header(api_path, body, self._token_manager._api_key)
-
-            # 构建请求头
-            headers = {
-                "Content-Type": "application/json",
-                "Authorization": token,
-                "authx": authx_info["authx_header"]
-            }
-
-            # 发送请求（使用预序列化的UTF-8字节流）
-            response = api._session.post(scan_url, headers=headers, data=body_bytes, timeout=10)
-            response.raise_for_status()
-            data = response.json()
-
-            if data and data.get("code") == 0:
+            # 由宿主对实际发送的请求体统一签名，避免依赖API内部会话和重复序列化。
+            response = api.request(api_path, method="post", data=payload)
+            if response and response.success:
                 logger.info(f"【飞牛影视调度器-精确扫描】🎉 请求成功！")
                 return True
             else:
-                logger.warning(f"【飞牛影视调度器-精确扫描】请求失败: {data}")
+                logger.warning(f"【飞牛影视调度器-精确扫描】请求失败: {response}")
                 return False
 
         except Exception as e:
@@ -1671,5 +1639,4 @@ class SignatureManager:
                 "data_hash": "",
                 "sign_string": ""
             }
-
 
